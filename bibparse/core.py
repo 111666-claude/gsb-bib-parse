@@ -53,10 +53,15 @@ def split_fields(body):
 
 def _add_entry(db, kind, body):
     key, _, rest = body.partition(",")
-    entry = Entry(key.strip(), kind, {})
+    key = key.strip()
+    if key in db.by_key:
+        return
+    entry = Entry(key, kind, {})
     for field in split_fields(rest):
         name, _, value = field.partition("=")
-        entry.fields[name.strip()] = _clean(value.strip())
+        name = name.strip().lower()
+        if name:
+            entry.fields[name] = _clean(value.strip())
     db.entries.append(entry)
     db.by_key[entry.key] = entry
 
@@ -91,13 +96,34 @@ def parse(text, counter):
         body = text[j + 1:k - 1]
         if kind == "string":
             name, _, value = body.partition("=")
-            db.strings[name.strip()] = _clean(value.strip())
+            db.strings[name.strip().lower()] = _clean(value.strip())
         else:
             _add_entry(db, kind, body)
         i = k
+    _expand_strings(db)
+    _apply_crossrefs(db)
     return db
 
 
 def lookup(db, key, counter):
-    fresh = parse(db.text, counter)
-    return fresh.by_key.get(key)
+    counter.scanned += 1
+    return db.by_key.get(key)
+
+
+def _expand_strings(db):
+    for entry in db.entries:
+        for name, value in entry.fields.items():
+            if value in db.strings:
+                entry.fields[name] = db.strings[value]
+
+
+def _apply_crossrefs(db):
+    for entry in db.entries:
+        ref_key = entry.fields.get("crossref")
+        if not ref_key or ref_key not in db.by_key:
+            continue
+        parent = db.by_key[ref_key]
+        for name, value in parent.fields.items():
+            if name == "crossref":
+                continue
+            entry.fields.setdefault(name, value)
