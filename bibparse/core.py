@@ -32,6 +32,14 @@ def _clean(raw):
     return raw
 
 
+def _is_quoted(raw):
+    raw = raw.strip()
+    return len(raw) >= 2 and (
+        (raw[0] == "{" and raw[-1] == "}")
+        or (raw[0] == '"' and raw[-1] == '"')
+    )
+
+
 def split_fields(body):
     out = []
     depth = 0
@@ -53,12 +61,37 @@ def split_fields(body):
 
 def _add_entry(db, kind, body):
     key, _, rest = body.partition(",")
-    entry = Entry(key.strip(), kind, {})
+    key = key.strip()
+    if key in db.by_key:
+        return
+    entry = Entry(key, kind, {})
+    bare = set()
     for field in split_fields(rest):
         name, _, value = field.partition("=")
-        entry.fields[name.strip()] = _clean(value.strip())
+        name = name.strip().lower()
+        if not name:
+            continue
+        raw = value.strip()
+        if not _is_quoted(raw):
+            bare.add(name)
+        entry.fields[name] = _clean(raw)
+    entry.bare = bare
     db.entries.append(entry)
     db.by_key[entry.key] = entry
+
+
+def _inherit_crossref(db):
+    for entry in db.entries:
+        target_key = entry.fields.get("crossref")
+        if not target_key:
+            continue
+        target = db.by_key.get(target_key.strip())
+        if target is None:
+            continue
+        for name, value in target.fields.items():
+            if name == "crossref" or name in entry.fields:
+                continue
+            entry.fields[name] = value
 
 
 def parse(text, counter):
@@ -95,9 +128,15 @@ def parse(text, counter):
         else:
             _add_entry(db, kind, body)
         i = k
+    for entry in db.entries:
+        for name in getattr(entry, "bare", ()):
+            raw = entry.fields[name]
+            if raw in db.strings:
+                entry.fields[name] = db.strings[raw]
+    _inherit_crossref(db)
     return db
 
 
 def lookup(db, key, counter):
-    fresh = parse(db.text, counter)
-    return fresh.by_key.get(key)
+    counter.scanned += 1
+    return db.by_key.get(key)
